@@ -5,16 +5,25 @@ from typing import List, Optional
 
 class CardWidget:
     """Widget for displaying a card as text"""
-    def __init__(self, parent, card=None, width=80, height=100):
+    def __init__(self, parent, card=None, width=80, height=110):
         self.parent = parent
         self.card = card
         self.width = width
         self.height = height
         self.frame = tk.Frame(parent, width=width, height=height, 
                              relief=tk.RAISED, bd=2, bg='white')
-        self.label = tk.Label(self.frame, text=self._get_card_text(), 
-                             font=('Arial', 10, 'bold'), bg='white')
-        self.label.pack(expand=True, fill='both')
+        self.frame.pack_propagate(False)
+        self.frame.grid_propagate(False)
+        self.label = tk.Label(
+            self.frame,
+            text=self._get_card_text(),
+            font=('Helvetica', 16, 'bold'),
+            bg='white',
+            fg='black',
+            justify='center'
+        )
+        self.label.config(wraplength=self.width - 12)
+        self.label.pack(expand=True, fill='both', padx=6, pady=6)
     
     def _get_card_text(self):
         if self.card is None:
@@ -38,6 +47,8 @@ class PlayerWidget:
         self.player = player
         self.position = position
         self.total_positions = total_positions
+        self.width = 180
+        self.height = 165
         
         # Calculate position on the oval table
         angle = (2 * math.pi * position) / total_positions
@@ -49,6 +60,8 @@ class PlayerWidget:
     def create_widget(self):
         # Player frame
         self.frame = tk.Frame(self.parent, bg='lightblue', relief=tk.RAISED, bd=2)
+        self.frame.config(width=self.width, height=self.height)
+        self.frame.pack_propagate(False)
         
         # Player name
         self.name_label = tk.Label(self.frame, text=self.player.name, 
@@ -62,11 +75,13 @@ class PlayerWidget:
         
         # Player cards
         self.cards_frame = tk.Frame(self.frame, bg='lightblue')
+        self.cards_frame.config(width=self.width - 20, height=110)
+        self.cards_frame.pack_propagate(False)
         self.cards_frame.pack()
         
         self.card_widgets = []
         for i in range(2):
-            card_widget = CardWidget(self.cards_frame, width=40, height=60)
+            card_widget = CardWidget(self.cards_frame, width=70, height=100)
             self.card_widgets.append(card_widget)
             card_widget.grid(row=0, column=i, padx=2)
         
@@ -75,7 +90,14 @@ class PlayerWidget:
         self.bet_label.pack()
         
         # Status
-        self.status_label = tk.Label(self.frame, text="", font=('Arial', 8), bg='lightblue')
+        self.status_label = tk.Label(
+            self.frame,
+            text="",
+            font=('Arial', 8),
+            bg='lightblue',
+            wraplength=self.width - 10,
+            justify='center'
+        )
         self.status_label.pack()
     
     def update_display(self):
@@ -133,7 +155,7 @@ class PlayerWidget:
     
     def place(self, x, y):
         """Place the widget at specific coordinates"""
-        self.frame.place(x=x, y=y)
+        self.frame.place(x=x, y=y, width=self.width, height=self.height)
 
 class PokerGUI:
     def __init__(self, game_manager):
@@ -291,7 +313,7 @@ class PokerGUI:
         
         # Create new community card widgets
         for card in self.game_manager.game_state.community_cards:
-            card_widget = CardWidget(self.community_cards_frame, card, width=60, height=80)
+            card_widget = CardWidget(self.community_cards_frame, card, width=80, height=110)
             card_widget.pack(side=tk.LEFT, padx=2)
             self.community_cards.append(card_widget)
     

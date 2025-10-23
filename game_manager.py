@@ -2,6 +2,7 @@ import os
 import sys
 import importlib.util
 from typing import List, Dict, Any, Optional, Tuple
+from collections import Counter
 import random
 from enum import Enum
 import time
@@ -87,6 +88,7 @@ class GameState:
         self.game_phase = "preflop"  # preflop, flop, turn, river, showdown
         self.deck = []
         self.winner = None
+        self.pending_players = set()
         
     def reset_deck(self):
         ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
@@ -172,6 +174,8 @@ class GameManager:
             if player.chips > 0:
                 self.game_state.current_player = i
                 break
+
+        self._reset_pending_players(self.game_state.current_player)
         
         if self.gui:
             self.gui.update_display()
@@ -215,29 +219,63 @@ class GameManager:
             if not player.is_folded:
                 player.current_bet = 0
                 # Keep total_bet for pot calculation
-    
+        self._reset_pending_players()
+
     def player_action(self, player_index: int, action: str, amount: int = 0):
         """Process a player's action"""
         if player_index >= len(self.game_state.players):
             return False
         
         player = self.game_state.players[player_index]
+        if player.is_folded or player.is_all_in:
+            self.game_state.pending_players.discard(player_index)
+            return False
+
+        success = False
+        previous_bet = self.game_state.current_bet
         
         if action == "fold":
             player.fold()
+            success = True
         elif action == "call":
-            call_amount = self.game_state.current_bet - player.current_bet
-            if call_amount <= player.chips:
-                if player.bet(call_amount):
-                    self.game_state.pot += call_amount
+            call_amount = max(0, self.game_state.current_bet - player.current_bet)
+            if call_amount == 0:
+                success = True
+            else:
+                amount_to_call = min(call_amount, player.chips)
+                if amount_to_call > 0 and player.bet(amount_to_call):
+                    self.game_state.pot += amount_to_call
+                    success = True
         elif action == "raise":
-            if amount > player.chips:
+            if amount <= 0:
                 return False
-            if player.bet(amount):
-                self.game_state.current_bet = player.total_bet
-                self.game_state.pot += amount
+            call_amount = max(0, self.game_state.current_bet - player.current_bet)
+            total_commit = call_amount + amount
+            amount_to_bet = min(total_commit, player.chips)
+            if amount_to_bet > 0 and player.bet(amount_to_bet):
+                self.game_state.pot += amount_to_bet
+                success = True
         elif action == "check":
-            pass  # No action needed
+            if self.game_state.current_bet == player.current_bet:
+                success = True
+        else:
+            return False
+
+        if not success:
+            return False
+
+        self.game_state.current_bet = max(previous_bet, player.current_bet)
+
+        was_raise = player.current_bet > previous_bet
+
+        if was_raise:
+            self.game_state.pending_players = {
+                idx for idx in self._players_who_can_act() if idx != player_index
+            }
+        else:
+            self.game_state.pending_players.discard(player_index)
+
+        self._remove_inactive_from_pending()
         
         if self.gui:
             self.gui.update_display()
@@ -247,7 +285,8 @@ class GameManager:
     def evaluate_hand(self, cards: List[Card]) -> Tuple[int, List[int]]:
         """Evaluate a poker hand and return (hand_rank, kickers)"""
         if len(cards) < 5:
-            return (0, [])
+            values = sorted([card.get_value() for card in cards], reverse=True)
+            return (1 if values else 0, values)
         
         # Get all possible 5-card combinations
         from itertools import combinations
@@ -264,77 +303,70 @@ class GameManager:
         """Evaluate a 5-card hand"""
         values = [card.get_value() for card in cards]
         suits = [card.suit for card in cards]
-        values.sort(reverse=True)
+        value_counts = Counter(values)
+        sorted_values_desc = sorted(values, reverse=True)
         
-        # Count occurrences
-        value_counts = {}
-        for value in values:
-            value_counts[value] = value_counts.get(value, 0) + 1
-        
-        counts = sorted(value_counts.values(), reverse=True)
         is_flush = len(set(suits)) == 1
-        is_straight = self._is_straight(values)
+        is_straight, straight_high = self._is_straight(values)
         
-        # Royal Flush (10)
-        if is_straight and is_flush and values[0] == 14:
-            return (10, [14])
+        count_groups = sorted(
+            value_counts.items(),
+            key=lambda item: (-item[1], -item[0])
+        )
+        counts = [count for _, count in count_groups]
+        ordered_vals = [val for val, _ in count_groups]
+        secondary_count = counts[1] if len(counts) > 1 else 0
         
-        # Straight Flush (9)
-        if is_straight and is_flush:
-            return (9, [values[0]])
+        if is_flush and is_straight:
+            if straight_high == 14 and sorted(values) == [10, 11, 12, 13, 14]:
+                return (10, [14])
+            return (9, [straight_high])
         
-        # Four of a Kind (8)
-        if counts == [4, 1]:
-            four_kind = [k for k, v in value_counts.items() if v == 4][0]
-            kicker = [k for k, v in value_counts.items() if v == 1][0]
-            return (8, [four_kind, kicker])
+        if counts[0] == 4:
+            four = ordered_vals[0]
+            kicker = max(v for v in values if v != four)
+            return (8, [four, kicker])
         
-        # Full House (7)
-        if counts == [3, 2]:
-            three_kind = [k for k, v in value_counts.items() if v == 3][0]
-            pair = [k for k, v in value_counts.items() if v == 2][0]
-            return (7, [three_kind, pair])
+        if counts[0] == 3 and secondary_count == 2:
+            return (7, [ordered_vals[0], ordered_vals[1]])
         
-        # Flush (6)
         if is_flush:
-            return (6, values)
+            return (6, sorted_values_desc)
         
-        # Straight (5)
         if is_straight:
-            return (5, [values[0]])
+            return (5, [straight_high])
         
-        # Three of a Kind (4)
-        if counts == [3, 1, 1]:
-            three_kind = [k for k, v in value_counts.items() if v == 3][0]
-            kickers = sorted([k for k, v in value_counts.items() if v == 1], reverse=True)
-            return (4, [three_kind] + kickers)
+        if counts[0] == 3:
+            kickers = sorted([v for v in values if v != ordered_vals[0]], reverse=True)
+            return (4, [ordered_vals[0]] + kickers)
         
-        # Two Pair (3)
-        if counts == [2, 2, 1]:
-            pairs = sorted([k for k, v in value_counts.items() if v == 2], reverse=True)
-            kicker = [k for k, v in value_counts.items() if v == 1][0]
-            return (3, pairs + [kicker])
+        if counts[0] == 2 and secondary_count == 2:
+            high_pair, low_pair = ordered_vals[:2]
+            kicker = max(v for v in values if v not in (high_pair, low_pair))
+            return (3, [high_pair, low_pair, kicker])
         
-        # One Pair (2)
-        if counts == [2, 1, 1, 1]:
-            pair = [k for k, v in value_counts.items() if v == 2][0]
-            kickers = sorted([k for k, v in value_counts.items() if v == 1], reverse=True)
+        if counts[0] == 2:
+            pair = ordered_vals[0]
+            kickers = sorted([v for v in values if v != pair], reverse=True)
             return (2, [pair] + kickers)
         
-        # High Card (1)
-        return (1, values)
+        return (1, sorted_values_desc)
     
-    def _is_straight(self, values: List[int]) -> bool:
-        """Check if values form a straight"""
-        if len(set(values)) != 5:
-            return False
+    def _is_straight(self, values: List[int]) -> Tuple[bool, int]:
+        """Check if values form a straight and return (is_straight, high_card)"""
+        unique_values = sorted(set(values))
+        if len(unique_values) != 5:
+            return False, 0
         
-        # Check for A-2-3-4-5 straight
-        if values == [14, 5, 4, 3, 2]:
-            return True
+        # Wheel straight (A-2-3-4-5)
+        if unique_values == [2, 3, 4, 5, 14]:
+            return True, 5
         
-        # Check for regular straight
-        return max(values) - min(values) == 4
+        for i in range(4):
+            if unique_values[i + 1] - unique_values[i] != 1:
+                return False, 0
+        
+        return True, unique_values[-1]
     
     def determine_winner(self) -> List[Player]:
         """Determine the winner(s) of the current hand"""
@@ -364,19 +396,19 @@ class GameManager:
         if not winners:
             return
         
-        # Only award to active winners (those with chips > 0)
-        active_winners = [w for w in winners if w.chips > 0]
-        if not active_winners:
+        share_count = len(winners)
+        if share_count == 0:
             return
         
-        pot_per_winner = self.game_state.pot // len(active_winners)
-        remainder = self.game_state.pot % len(active_winners)
+        pot_per_winner = self.game_state.pot // share_count
+        remainder = self.game_state.pot % share_count
         
-        for i, winner in enumerate(active_winners):
+        for i, winner in enumerate(winners):
             amount = pot_per_winner + (1 if i < remainder else 0)
             winner.chips += amount
         
         self.game_state.pot = 0
+        self.game_state.pending_players.clear()
     
     def get_random_action(self, player: Player) -> Tuple[str, int]:
         """Get a random action for a player"""
@@ -473,12 +505,9 @@ class GameManager:
         if len(active_players) <= 1:
             return True
         
-        # Check if all active players have the same bet amount AND there's been at least one bet
-        if len(active_players) > 1:
-            bet_amounts = [p.total_bet for p in active_players]
-            # Only progress if all bets are equal AND there's been some betting
-            return len(set(bet_amounts)) == 1 and max(bet_amounts) > 0
-    
+        if not self.game_state.pending_players:
+            return True
+
     def _get_agent_action(self, player):
         """Get action from player's agent"""
         if player.agent and hasattr(player.agent, 'make_decision'):
@@ -504,15 +533,62 @@ class GameManager:
     
     def next_player(self):
         """Move to the next active player"""
-        # Find next active player
-        original_player = self.game_state.current_player
-        while True:
-            self.game_state.current_player = (self.game_state.current_player + 1) % len(self.game_state.players)
-            player = self.game_state.players[self.game_state.current_player]
-            if player.chips > 0:  # Only move to players with chips
-                break
-            if self.game_state.current_player == original_player:  # Prevent infinite loop
-                break
+        if not self.game_state.players:
+            return
+
+        total_players = len(self.game_state.players)
+        start_index = self.game_state.current_player
+
+        for offset in range(1, total_players + 1):
+            candidate = (start_index + offset) % total_players
+            candidate_player = self.game_state.players[candidate]
+
+            if candidate_player.is_folded or candidate_player.chips <= 0 or candidate_player.is_all_in:
+                continue
+            if self.game_state.pending_players and candidate not in self.game_state.pending_players:
+                continue
+
+            self.game_state.current_player = candidate
+            return
+
+        # Fallback to original player if no valid candidate found
+        self.game_state.current_player = start_index
+
+    def _players_who_can_act(self):
+        """Return indices of players who can take an action"""
+        return [
+            idx for idx, player in enumerate(self.game_state.players)
+            if not player.is_folded and not player.is_all_in and player.chips > 0
+        ]
+
+    def _reset_pending_players(self, starting_index=None):
+        """Reset the set of players who still need to act in the current betting round"""
+        self.game_state.pending_players = set(self._players_who_can_act())
+
+        if not self.game_state.pending_players:
+            return
+
+        target_index = self.game_state.current_player if starting_index is None else starting_index
+        if target_index not in self.game_state.pending_players:
+            total_players = len(self.game_state.players)
+            for offset in range(total_players):
+                candidate = (target_index + offset) % total_players
+                if candidate in self.game_state.pending_players:
+                    self.game_state.current_player = candidate
+                    break
+        else:
+            self.game_state.current_player = target_index
+
+    def _remove_inactive_from_pending(self):
+        """Remove players who can no longer act from the pending set"""
+        inactive = {
+            idx for idx in list(self.game_state.pending_players)
+            if idx >= len(self.game_state.players)
+            or self.game_state.players[idx].is_folded
+            or self.game_state.players[idx].is_all_in
+            or self.game_state.players[idx].chips <= 0
+        }
+        self.game_state.pending_players -= inactive
     
     def start_gui(self):
         """Start the GUI"""
