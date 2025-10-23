@@ -345,13 +345,17 @@ class GameManager:
                 success = True
                 action_display = "Check"
             else:
-                amount_to_call = min(call_amount, player.chips)
-                if amount_to_call <= 0:
+                if call_amount > player.chips:
+                    return self._auto_fold(
+                        player_index,
+                        f"attempted to call ${call_amount} with only ${player.chips}",
+                    )
+                if call_amount <= 0:
                     return self._auto_fold(player_index, "cannot call without chips")
-                if player.bet(amount_to_call):
-                    self.game_state.pot += amount_to_call
+                if player.bet(call_amount):
+                    self.game_state.pot += call_amount
                     success = True
-                    action_display = f"Call ${amount_to_call}"
+                    action_display = f"Call ${call_amount}"
         elif action == "raise":
             if amount is None:
                 return self._auto_fold(player_index, "raise amount missing")
@@ -702,30 +706,49 @@ class GameManager:
 
     def _get_agent_action(self, player):
         """Get action from player's agent"""
-        if player.agent and hasattr(player.agent, 'make_decision'):
+        agent = player.agent
+        if agent and hasattr(agent, 'make_decision'):
             try:
                 game_state = self._build_agent_game_state(player)
-                decision = player.agent.make_decision(game_state)
+                prepared = False
+                if isinstance(agent, PokerAgentBase):
+                    agent._prepare_turn(game_state)
+                    prepared = True
+                decision = agent.make_decision(game_state)
                 action, amount = self._normalize_agent_action(decision)
                 if action is None or not self._is_valid_agent_action(player, action, amount):
                     player.pending_invalid_reason = (
                         f"{player.name}'s agent attempted an invalid move ({decision})."
                     )
+                    if isinstance(agent, PokerAgentBase):
+                        agent.debug(
+                            f"Invalid decision {decision} with call_required={game_state['call_required']} "
+                            f"and stack={player.chips}"
+                        )
                     return "fold", 0
                 if action == "all-in":
                     call_required = game_state['call_required']
                     available = player.chips
                     if available <= 0:
                         return "fold", 0
-                    if call_required >= available:
-                        return "call", available
+                    if call_required > available:
+                        if isinstance(agent, PokerAgentBase):
+                            agent.debug(
+                                f"Invalid all-in: needs ${call_required} to call but only has ${available}"
+                            )
+                        return "fold", 0
                     raise_amount = available - call_required
                     if raise_amount <= 0:
                         return "call", available
                     return "raise", raise_amount
                 return action, amount
-            except Exception:
+            except Exception as exc:
+                if isinstance(agent, PokerAgentBase):
+                    agent.debug(f"Error during decision: {exc}")
                 return "fold", 0
+            finally:
+                if isinstance(agent, PokerAgentBase):
+                    agent._finish_turn()
         
         # Fallback to random action
         return self.get_random_action(player)
@@ -801,6 +824,8 @@ class GameManager:
             player.last_action = "fold"
         player.last_action_display = "Invalid -> Fold"
         player.pending_invalid_reason = None
+        if isinstance(player.agent, PokerAgentBase):
+            player.agent.debug(f"Forcing fold: {reason}")
         self.game_state.pending_players.discard(player_index)
         self.last_action_note = f"{player.name}: invalid action - {reason}. Automatic fold applied."
         return True
@@ -951,11 +976,9 @@ class GameManager:
                 return amount in (0, None)
             if available <= 0 or amount is None:
                 return False
-            if call_required <= available and amount == call_required:
-                return True
-            if call_required > available and amount == available:
-                return True
-            return False
+            if call_required > available:
+                return False
+            return amount == call_required
 
         if action == "raise":
             if amount is None or amount <= 0:
