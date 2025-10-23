@@ -1,111 +1,98 @@
-# AI Poker Competition
+# AI Poker Workshop
 
-A GUI-based poker game system for AI agent competitions. Players can implement poker strategies as Python classes and compete against each other.
+Welcome to the AI Poker Workshop – a sandbox for teaching poker bots how to play Texas Hold ’em. The project ships with a simple GUI (tkinter) or CLI fallback, a handful of example agents, and the hooks you need to build your own strategy.
 
-## Features
+---
 
-- **Text-based Card Rendering**: Cards are displayed as text (e.g., "Ace of Spades") instead of graphics
-- **Oval Poker Table**: Visual representation of a poker table with players positioned around it
-- **Autonomous AI Agents**: Agents play automatically with random strategies
-- **Configurable Move Intervals**: Set timing between moves (default 1 second)
-- **Real-time Game State**: Live updates of pot, community cards, player chips, and current actions
-- **Complete Poker Logic**: Full hand evaluation, pot winning, and game flow
-- **Agent Loading**: Automatically loads poker agents from the `poker_agents` folder
-- **Game Logging**: Complete log of all game actions and decisions
-- **Both GUI and CLI**: Visual interface with tkinter or command-line fallback
+## What’s in the box?
 
-## Quick Start
+| File / Folder            | Purpose |
+|--------------------------|---------|
+| `main.py`                | Entry point. Tries to launch the GUI; falls back to CLI when tkinter is missing. |
+| `poker_cli.py`           | Menu-driven command-line interface. |
+| `poker_gui.py`           | Tkinter table view, player widgets, logs, and auto-play controls. |
+| `game_manager.py`        | Core game engine: shuffles, deals, tracks bets, evaluates hands, and mediates agent actions. |
+| `poker_agents/agent_*.py`| Sample agents that demonstrate different play styles. |
+| `poker_agents/agent_base.py` | Abstract base class every custom agent must subclass. |
+| `poker_agents/agent_template.py` | Copy/paste starter file with scaffolding and comments. |
 
-1. **Run the game**:
+---
 
+## Running the game
+
+```bash
+python main.py
+``` 
+
+*If the GUI fails with "No module named tkinter":*
+1. macOS (Homebrew python):
    ```bash
-   python main.py
+   brew install python-tk
+   ```
+   or install the official python.org build (tkinter included).
+2. Windows: tkinter ships with the standard installer—re-run the installer and include “tcl/tk”.
+3. Linux (Debian/Ubuntu):
+   ```bash
+   sudo apt-get install python3-tk
    ```
 
-2. **Use the GUI controls**:
-   - Click "New Hand" to deal a new hand
-   - Click "Next Phase" to advance through flop, turn, river
-   - Click "Start Auto Play" to watch agents play autonomously
-   - Adjust move interval for faster/slower gameplay
-   - Watch the game log for all actions
+Once tkinter is available, `main.py` launches the GUI. Without it, the CLI automatically starts.
 
-## Creating Poker Agents
+---
 
-To create a poker agent, add a Python file to the `poker_agents` folder with the following structure:
+## Building your own agent
+
+1. Copy `poker_agents/agent_template.py` → `poker_agents/my_agent.py`.
+2. Rename the class (or override `DEFAULT_NAME`) and fill in `make_decision`.
+3. `GameManager` auto-loads any `PokerAgent` class in `poker_agents/` (except the base/template files), up to eight seats.
+
+### Agent API recap
+
+Every agent must subclass `PokerAgentBase` and implement:
 
 ```python
-class PokerAgent:
-    def __init__(self, name="Your Agent Name"):
-        self.name = name
-        self.chips = 1000
-
+class PokerAgent(PokerAgentBase):
     def make_decision(self, game_state):
-        # Implement your poker strategy here
-        # Return one of: "fold", "call", "raise", "check"
-        # For raise, you can also return the amount
-        pass
+        ...
+        return (action, amount)
 ```
 
-### Game State Information
+Allowed `action` values (case-insensitive):
 
-The `game_state` object contains:
+- `"fold"`
+- `"check"`
+- `"call"`
+- `"raise"`
+- `"all-in"` / `"shove"`
 
-- `players`: List of all players with their chips, cards, bets
-- `community_cards`: List of community cards on the table
-- `pot`: Current pot size
-- `current_bet`: Current bet amount
-- `game_phase`: Current phase (preflop, flop, turn, river, showdown)
+For `call` or `raise`, return a tuple `(action, amount)` where `amount` is the chips you want to commit. Unsupported actions (or numbers you can’t afford) cause the engine to automatically fold your agent.
 
-## File Structure
+### Visible game state
 
-```
-ai-workshop/
-├── main.py                 # Main entry point
-├── game_manager.py         # Game logic and state management
-├── poker_gui.py           # GUI implementation
-├── requirements.txt       # Dependencies (none required)
-├── README.md             # This file
-└── poker_agents/         # Folder for AI agents
-    ├── agent_1.py        # Sample agent 1
-    ├── agent_2.py        # Sample agent 2
-    ├── agent_3.py        # Sample agent 3
-    └── agent_4.py        # Sample agent 4
-```
+`game_state` is a dictionary with only public information:
 
-## Game Flow
+- `self`: dict containing your chip stack, hole cards, committed bets, and `is_all_in` flag.
+- `community_cards`: list of revealed board cards.
+- `pot`: total chips in the middle.
+- `current_bet`: highest bet any player has committed in the current round.
+- `call_required`: chips you must add to match the current bet.
+- `game_phase`: one of `preflop`, `flop`, `turn`, `river`, `showdown`.
+- `other_player_moves`: list of `{"name", "last_action"}` for every opponent.
+- `previous_player_action`: `{"name", "last_action"}` for the player who acted immediately before you (or `None` if you’re first).
 
-1. **Preflop**: Each player gets 2 hole cards, betting round
-2. **Flop**: 3 community cards revealed, betting round
-3. **Turn**: 1 more community card, betting round
-4. **River**: Final community card, betting round
-5. **Showdown**: Players reveal cards, winner determined
+Use this snapshot to decide your move—no direct access to other players’ cards or chip stacks.
 
-## GUI Components
+---
 
-- **Poker Table**: Oval table with players positioned around it
-- **Player Widgets**: Show name, chips, cards, current bet, status, last action
-- **Community Cards**: Display in the center of the table
-- **Game Info**: Pot size, current phase, active player
-- **Autonomous Controls**: Start/stop auto play, adjust move intervals
-- **Game Log**: Scrollable log of all game events
+## Playing with the sample agents
 
-## Text-Based Card Display
+Run `python main.py` and use the GUI (“Start Auto Play”) to watch the four built-in agents:
 
-Cards are rendered as text rectangles showing:
+1. **Agent 1** – shoves all-in every turn.
+2. **Agent 2** – mirrors the previous player.
+3. **Agent 3** – checks when possible, otherwise calls small bets.
+4. **Agent 4** – coin-flip caller that instantly shoves with an Ace.
 
-- Rank (2, 3, 4, 5, 6, 7, 8, 9, 10, J, Q, K, A)
-- Suit symbol (♥, ♦, ♣, ♠)
+These demonstrate the decision API and the consequences of invalid moves (auto-fold). Use them as references when shaping your own strategies.
 
-Example: "Ace of Spades" appears as a rectangle with "A" and "♠"
-
-## Development
-
-The system is built with Python's standard library:
-
-- `tkinter` for GUI
-- `random` for card shuffling
-- `enum` for card suits
-- `typing` for type hints
-- `importlib` for dynamic agent loading
-
-No external dependencies required!
+Happy hacking, and may the best bot win!

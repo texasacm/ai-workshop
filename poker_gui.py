@@ -62,6 +62,18 @@ class PlayerWidget:
         self.frame = tk.Frame(self.parent, bg='lightblue', relief=tk.RAISED, bd=2)
         self.frame.config(width=self.width, height=self.height)
         self.frame.pack_propagate(False)
+
+        # Hand label (updated at showdown)
+        self.hand_label = tk.Label(
+            self.frame,
+            text="",
+            font=('Arial', 9, 'italic'),
+            bg='lightblue',
+            fg='black',
+            wraplength=self.width - 10,
+            justify='center'
+        )
+        self.hand_label.pack()
         
         # Player name
         self.name_label = tk.Label(self.frame, text=self.player.name, 
@@ -77,14 +89,26 @@ class PlayerWidget:
         self.cards_frame = tk.Frame(self.frame, bg='lightblue')
         self.cards_frame.config(width=self.width - 20, height=110)
         self.cards_frame.pack_propagate(False)
-        self.cards_frame.pack()
-        
+        self.cards_frame.pack(pady=4)
+        self.cards_frame.grid_columnconfigure(0, weight=1)
+        self.cards_frame.grid_columnconfigure(1, weight=1)
+        self.cards_frame.grid_rowconfigure(0, weight=1)
+
         self.card_widgets = []
         for i in range(2):
             card_widget = CardWidget(self.cards_frame, width=70, height=100)
             self.card_widgets.append(card_widget)
-            card_widget.grid(row=0, column=i, padx=2)
-        
+            card_widget.grid(row=0, column=i, padx=6, pady=2, sticky="n")
+
+        # Last action label
+        self.last_action_label = tk.Label(
+            self.frame,
+            text="",
+            font=('Arial', 8, 'italic'),
+            bg='lightblue'
+        )
+        self.last_action_label.pack(pady=2)
+
         # Current bet
         self.bet_label = tk.Label(self.frame, text="", font=('Arial', 8), bg='lightblue')
         self.bet_label.pack()
@@ -110,6 +134,17 @@ class PlayerWidget:
                 card_widget.update_card(self.player.hole_cards[i])
             else:
                 card_widget.update_card(None)
+
+        # Show evaluated hand (if any)
+        if self.player.best_hand_name:
+            self.hand_label.config(text=self.player.best_hand_name)
+        else:
+            self.hand_label.config(text="")
+
+        if self.player.last_action_display:
+            self.last_action_label.config(text=self.player.last_action_display)
+        else:
+            self.last_action_label.config(text="")
         
         # Update bet display
         if self.player.current_bet > 0:
@@ -133,8 +168,8 @@ class PlayerWidget:
         self.status_label.config(text=" | ".join(status))
         
         # Set colors based on player status
-        if self.player.chips <= 0:
-            # Grey out players with no chips
+        if getattr(self.player, "is_eliminated", False):
+            # Grey out players who are eliminated from the game
             bg_color = 'lightgray'
             text_color = 'gray'
         elif hasattr(self.parent, 'current_player') and self.player == self.parent.current_player:
@@ -150,8 +185,10 @@ class PlayerWidget:
         self.name_label.config(bg=bg_color, fg=text_color)
         self.chips_label.config(bg=bg_color, fg=text_color)
         self.cards_frame.config(bg=bg_color)
+        self.last_action_label.config(bg=bg_color, fg=text_color)
         self.bet_label.config(bg=bg_color, fg=text_color)
         self.status_label.config(bg=bg_color, fg=text_color)
+        self.hand_label.config(bg=bg_color, fg=text_color)
     
     def place(self, x, y):
         """Place the widget at specific coordinates"""
@@ -208,6 +245,18 @@ class PokerGUI:
         
         self.community_cards_frame = tk.Frame(self.community_frame, bg='lightgray')
         self.community_cards_frame.pack()
+
+        # Status / error message label
+        self.message_label = tk.Label(
+            self.info_frame,
+            text="",
+            font=('Arial', 9, 'bold'),
+            fg='red',
+            bg='lightgray',
+            wraplength=260,
+            justify='left'
+        )
+        self.message_label.pack(pady=5, fill=tk.X)
         
         # Control panel
         self.control_frame = tk.Frame(self.root, bg='lightgray')
@@ -255,6 +304,9 @@ class PokerGUI:
         self.log_text = tk.Text(self.log_frame, height=8, width=80, 
                                font=('Courier', 9), bg='black', fg='green')
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        self.log_text.tag_configure("info", foreground="green")
+        self.log_text.tag_configure("error", foreground="red")
+        self.log_text.tag_configure("default", foreground="white")
         
         # Create player widgets
         self.create_player_widgets()
@@ -303,6 +355,13 @@ class PokerGUI:
         # Update player widgets
         for widget in self.player_widgets:
             widget.update_display()
+
+        note = self.game_manager.pop_last_action_note()
+        if note:
+            self.show_status_message(note, error=True)
+            self.log_message(note, color="error")
+        else:
+            self.show_status_message("")
     
     def update_community_cards(self):
         """Update the community cards display"""
@@ -317,10 +376,18 @@ class PokerGUI:
             card_widget.pack(side=tk.LEFT, padx=2)
             self.community_cards.append(card_widget)
     
-    def log_message(self, message):
+    def log_message(self, message, color="info"):
         """Add a message to the game log"""
-        self.log_text.insert(tk.END, f"{message}\n")
+        tag = "info" if color == "info" else "error" if color == "error" else "default"
+        self.log_text.insert(tk.END, f"{message}\n", tag)
         self.log_text.see(tk.END)
+
+    def show_status_message(self, message: str, error: bool = False):
+        """Display transient feedback for invalid moves or other alerts."""
+        if message:
+            self.message_label.config(text=message, fg='red' if error else 'black')
+        else:
+            self.message_label.config(text="")
     
     def new_hand(self):
         """Start a new hand"""

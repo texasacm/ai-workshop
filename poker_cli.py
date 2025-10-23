@@ -33,6 +33,8 @@ class PokerCLI:
                 status.append("FOLDED")
             if player.is_all_in:
                 status.append("ALL IN")
+            if getattr(player, "is_eliminated", False):
+                status.append("ELIMINATED")
             if player.current_bet > 0:
                 status.append(f"BET: ${player.current_bet}")
             
@@ -41,6 +43,10 @@ class PokerCLI:
             print(f"  {i+1}. {player.name}: ${player.chips} chips{status_str}")
             if player.hole_cards and not player.is_folded:
                 print(f"     Cards: {[str(card) for card in player.hole_cards]}")
+            if player.best_hand_name:
+                print(f"     Best Hand: {player.best_hand_name}")
+            if player.last_action_display:
+                print(f"     Last Move: {player.last_action_display}")
     
     def show_menu(self):
         """Show the main menu"""
@@ -67,25 +73,23 @@ class PokerCLI:
         choice = input("Choose action (1-5): ").strip()
         
         if choice == "1":
-            self.game.player_action(self.game.game_state.current_player, "fold")
-            print(f"{current_player.name} folded")
-            self.next_player()
+            success = self.game.player_action(self.game.game_state.current_player, "fold")
+            self._handle_action_result(success, f"{current_player.name} folded")
         elif choice == "2":
-            self.game.player_action(self.game.game_state.current_player, "call")
-            print(f"{current_player.name} called")
-            self.next_player()
+            success = self.game.player_action(self.game.game_state.current_player, "call")
+            self._handle_action_result(success, f"{current_player.name} called")
         elif choice == "3":
-            self.game.player_action(self.game.game_state.current_player, "check")
-            print(f"{current_player.name} checked")
-            self.next_player()
+            success = self.game.player_action(self.game.game_state.current_player, "check")
+            self._handle_action_result(success, f"{current_player.name} checked")
         elif choice == "4":
             try:
                 amount = int(input("Raise amount: $"))
-                if self.game.player_action(self.game.game_state.current_player, "raise", amount):
-                    print(f"{current_player.name} raised by ${amount}")
-                    self.next_player()
-                else:
-                    print("Invalid raise amount")
+                success = self.game.player_action(self.game.game_state.current_player, "raise", amount)
+                self._handle_action_result(
+                    success,
+                    f"{current_player.name} raised by ${amount}",
+                    "Invalid raise amount",
+                )
             except ValueError:
                 print("Invalid amount")
         elif choice == "5":
@@ -98,6 +102,7 @@ class PokerCLI:
         print("Playing autonomous round...")
         continue_playing = self.game.play_autonomous_round()
         self.display_game_state()
+        self._report_last_note()
         
         if not continue_playing:
             print("Round completed!")
@@ -105,6 +110,25 @@ class PokerCLI:
     def next_player(self):
         """Move to next player"""
         self.game.game_state.current_player = (self.game.game_state.current_player + 1) % len(self.game.game_state.players)
+
+    def _handle_action_result(self, success, success_message=None, failure_message=None):
+        """Print action outcomes and advance to the next player when needed."""
+        note = self.game.pop_last_action_note()
+        if note:
+            print(f"!!! {note}")
+        elif success and success_message:
+            print(success_message)
+        elif not success and failure_message:
+            print(failure_message)
+
+        if success:
+            self.next_player()
+
+    def _report_last_note(self):
+        """Print any deferred engine notes (e.g., invalid move auto-folds)."""
+        note = self.game.pop_last_action_note()
+        if note:
+            print(f"!!! {note}")
     
     def run(self):
         """Run the CLI game"""

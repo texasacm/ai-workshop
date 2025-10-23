@@ -5,13 +5,60 @@ from typing import List, Dict, Any, Optional, Tuple
 from collections import Counter
 import random
 from enum import Enum
-import time
+
+from poker_agents.agent_base import PokerAgentBase
 
 class Suit(Enum):
     HEARTS = "♥"
     DIAMONDS = "♦"
     CLUBS = "♣"
     SPADES = "♠"
+
+VALUE_NAMES = {
+    14: "Ace",
+    13: "King",
+    12: "Queen",
+    11: "Jack",
+    10: "Ten",
+    9: "Nine",
+    8: "Eight",
+    7: "Seven",
+    6: "Six",
+    5: "Five",
+    4: "Four",
+    3: "Three",
+    2: "Two",
+}
+
+PLURAL_VALUE_NAMES = {
+    14: "Aces",
+    13: "Kings",
+    12: "Queens",
+    11: "Jacks",
+    10: "Tens",
+    9: "Nines",
+    8: "Eights",
+    7: "Sevens",
+    6: "Sixes",
+    5: "Fives",
+    4: "Fours",
+    3: "Threes",
+    2: "Twos",
+}
+
+HAND_RANK_LABELS = {
+    10: "Royal Flush",
+    9: "Straight Flush",
+    8: "Four of a Kind",
+    7: "Full House",
+    6: "Flush",
+    5: "Straight",
+    4: "Three of a Kind",
+    3: "Two Pair",
+    2: "One Pair",
+    1: "High Card",
+    0: "No Hand",
+}
 
 class Card:
     def __init__(self, rank: str, suit: Suit):
@@ -38,7 +85,7 @@ class Card:
             return int(self.rank)
 
 class Player:
-    def __init__(self, name: str, chips: int = 1000, agent=None):
+    def __init__(self, name: str, chips: int = 100, agent=None):
         self.name = name
         self.chips = chips
         self.hole_cards = []
@@ -49,6 +96,11 @@ class Player:
         self.agent = agent
         self.position = 0
         self.last_action = None
+        self.last_action_display = None
+        self.best_hand_rank = 0
+        self.best_hand_name = None
+        self.pending_invalid_reason = None
+        self.is_eliminated = False
     
     def add_card(self, card: Card):
         self.hole_cards.append(card)
@@ -76,6 +128,12 @@ class Player:
         self.is_folded = False
         self.is_all_in = False
         self.clear_cards()
+        self.last_action = None
+        self.last_action_display = None
+        self.best_hand_rank = 0
+        self.best_hand_name = None
+        self.pending_invalid_reason = None
+        # do not reset is_eliminated here; elimination persists across hands
 
 class GameState:
     def __init__(self):
@@ -103,9 +161,13 @@ class GameState:
 
 class GameManager:
     def __init__(self, move_interval: float = 1.0):
+        """Initialize the game engine and eagerly load any available agents."""
         self.game_state = GameState()
         self.gui = None
         self.move_interval = move_interval
+        self.last_action_note = None
+        self.pending_new_hand = False
+        self.game_over = False
         self.load_agents()
     
     def load_agents(self):
@@ -114,10 +176,15 @@ class GameManager:
         if not os.path.exists(agents_folder):
             print(f"Warning: {agents_folder} folder not found")
             return
-        
-        agent_files = [f for f in os.listdir(agents_folder) if f.endswith('.py')]
+
+        agent_files = [
+            f for f in os.listdir(agents_folder)
+            if f.endswith('.py') and f not in ('agent_base.py', '__init__.py', 'agent_template.py')
+        ]
+        agent_files.sort()
         
         for i, agent_file in enumerate(agent_files[:8]):  # Max 8 players
+            default_name = f"Agent {i+1}"
             try:
                 spec = importlib.util.spec_from_file_location(
                     f"agent_{i}", 
@@ -127,36 +194,63 @@ class GameManager:
                 spec.loader.exec_module(module)
                 
                 # Try to instantiate the agent
+                player = None
                 if hasattr(module, 'PokerAgent'):
-                    agent = module.PokerAgent(f"Agent {i+1}")
-                    player = Player(f"Agent {i+1}", 1000, agent)
-                    player.position = i
-                    self.game_state.players.append(player)
-                else:
-                    # Create a default player if no PokerAgent class found
-                    player = Player(f"Agent {i+1}", 1000)
-                    player.position = i
-                    self.game_state.players.append(player)
+                    agent_cls = module.PokerAgent
+                    agent = self._instantiate_agent(agent_cls, default_name)
+                    if isinstance(agent, PokerAgentBase) and callable(getattr(agent, 'make_decision', None)):
+                        agent.name = agent.name or default_name
+                        agent.chips = PokerAgentBase.STARTING_CHIPS
+                        player = Player(agent.name, PokerAgentBase.STARTING_CHIPS, agent)
+                if player is None:
+                    raise ValueError("Invalid PokerAgent implementation")
+                player.position = i
+                self.game_state.players.append(player)
                     
             except Exception as e:
                 print(f"Error loading {agent_file}: {e}")
                 # Create a default player on error
-                player = Player(f"Agent {i+1}", 1000)
+                player = Player(default_name, PokerAgentBase.STARTING_CHIPS)
                 player.position = i
                 self.game_state.players.append(player)
-    
+
+    def _instantiate_agent(self, agent_cls, fallback_name: str):
+        """Instantiate an agent, allowing optional name injection."""
+        try:
+            return agent_cls()
+        except TypeError:
+            # Try again allowing name to be passed explicitly
+            return agent_cls(name=fallback_name)
+
     def start_new_hand(self):
         """Start a new poker hand"""
+        if self.game_over:
+            return
         self.game_state.reset_deck()
         self.game_state.community_cards = []
         self.game_state.pot = 0
         self.game_state.current_bet = 0
         self.game_state.winner = None
+        self.pending_new_hand = False
         
         # Reset only active players (those with chips)
         for player in self.game_state.players:
+            if player.is_eliminated:
+                player.is_folded = True
+                player.hole_cards = []
+                player.last_action = "eliminated"
+                player.last_action_display = "Eliminated"
+                player.best_hand_rank = 0
+                player.best_hand_name = None
+                continue
             if player.chips > 0:  # Only reset players who are still in the game
                 player.reset_for_new_hand()
+            else:
+                player.is_folded = True
+                player.hole_cards = []
+                player.best_hand_rank = 0
+                player.best_hand_name = None
+                player.pending_invalid_reason = None
         
         # Deal hole cards only to active players
         for _ in range(2):
@@ -203,6 +297,7 @@ class GameManager:
             self.game_state.game_phase = "river"
         elif self.game_state.game_phase == "river":
             self.game_state.game_phase = "showdown"
+            self.determine_winner()
         
         # Reset betting for new phase (except showdown)
         if self.game_state.game_phase != "showdown":
@@ -222,7 +317,7 @@ class GameManager:
         self._reset_pending_players()
 
     def player_action(self, player_index: int, action: str, amount: int = 0):
-        """Process a player's action"""
+        """Process a player's action; invalid attempts trigger an automatic fold."""
         if player_index >= len(self.game_state.players):
             return False
         
@@ -233,36 +328,59 @@ class GameManager:
 
         success = False
         previous_bet = self.game_state.current_bet
+        note_from_agent = player.pending_invalid_reason
+        player.pending_invalid_reason = None
+        self.last_action_note = None
+        action_display = None
         
         if action == "fold":
             player.fold()
             success = True
+            if note_from_agent:
+                self.last_action_note = f"{note_from_agent} Automatic fold applied."
+            action_display = "Fold"
         elif action == "call":
             call_amount = max(0, self.game_state.current_bet - player.current_bet)
             if call_amount == 0:
                 success = True
+                action_display = "Check"
             else:
                 amount_to_call = min(call_amount, player.chips)
-                if amount_to_call > 0 and player.bet(amount_to_call):
+                if amount_to_call <= 0:
+                    return self._auto_fold(player_index, "cannot call without chips")
+                if player.bet(amount_to_call):
                     self.game_state.pot += amount_to_call
                     success = True
+                    action_display = f"Call ${amount_to_call}"
         elif action == "raise":
+            if amount is None:
+                return self._auto_fold(player_index, "raise amount missing")
             if amount <= 0:
-                return False
+                return self._auto_fold(player_index, "raise amount must be positive")
             call_amount = max(0, self.game_state.current_bet - player.current_bet)
             total_commit = call_amount + amount
-            amount_to_bet = min(total_commit, player.chips)
-            if amount_to_bet > 0 and player.bet(amount_to_bet):
-                self.game_state.pot += amount_to_bet
+            if total_commit > player.chips:
+                return self._auto_fold(
+                    player_index,
+                    f"raise requires ${total_commit} but only ${player.chips} available",
+                )
+            if total_commit <= 0:
+                return self._auto_fold(player_index, "raise must increase the bet")
+            if player.bet(total_commit):
+                self.game_state.pot += total_commit
                 success = True
+                action_display = f"Raise to ${player.current_bet}"
         elif action == "check":
             if self.game_state.current_bet == player.current_bet:
                 success = True
+                action_display = "Check"
+            else:
+                return self._auto_fold(player_index, "cannot check while facing a bet")
         else:
-            return False
+            return self._auto_fold(player_index, f"unknown action '{action}'")
 
         if not success:
-            return False
+            return self._auto_fold(player_index, f"failed to execute {action}")
 
         self.game_state.current_bet = max(previous_bet, player.current_bet)
 
@@ -280,6 +398,10 @@ class GameManager:
         if self.gui:
             self.gui.update_display()
         
+        player.last_action = action
+        if player.is_all_in and action_display:
+            action_display += " (All-In)"
+        player.last_action_display = action_display or action.title()
         return True
     
     def evaluate_hand(self, cards: List[Card]) -> Tuple[int, List[int]]:
@@ -313,6 +435,7 @@ class GameManager:
             value_counts.items(),
             key=lambda item: (-item[1], -item[0])
         )
+        # Frequency distribution simplifies identifying pairs, trips, etc.
         counts = [count for _, count in count_groups]
         ordered_vals = [val for val, _ in count_groups]
         secondary_count = counts[1] if len(counts) > 1 else 0
@@ -370,9 +493,16 @@ class GameManager:
     
     def determine_winner(self) -> List[Player]:
         """Determine the winner(s) of the current hand"""
+        # Reset previously stored hand summaries before evaluating fresh results
+        for player in self.game_state.players:
+            player.best_hand_rank = 0
+            player.best_hand_name = None
+
         active_players = [p for p in self.game_state.players if not p.is_folded]
         
         if len(active_players) == 1:
+            active_players[0].best_hand_rank = 1
+            active_players[0].best_hand_name = "Last Player Standing"
             return active_players
         
         # Evaluate each player's best hand
@@ -380,6 +510,8 @@ class GameManager:
         for player in active_players:
             all_cards = player.hole_cards + self.game_state.community_cards
             hand_rank, kickers = self.evaluate_hand(all_cards)
+            player.best_hand_rank = hand_rank
+            player.best_hand_name = self._hand_rank_to_name(hand_rank, kickers)
             player_hands.append((player, hand_rank, kickers))
         
         # Sort by hand strength
@@ -406,9 +538,29 @@ class GameManager:
         for i, winner in enumerate(winners):
             amount = pot_per_winner + (1 if i < remainder else 0)
             winner.chips += amount
-        
+
         self.game_state.pot = 0
         self.game_state.pending_players.clear()
+
+        # Eliminate players who failed to rebuild their stack and did not win the pot
+        for player in self.game_state.players:
+            if player in winners and player.chips > 0:
+                player.is_eliminated = False
+            elif player.chips == 0 and player not in winners:
+                player.is_eliminated = True
+                player.is_folded = True
+                player.last_action_display = "Eliminated"
+
+        # Victory check: one player holds every chip
+        total_chips = sum(p.chips for p in self.game_state.players)
+        champions = [p for p in self.game_state.players if p.chips == total_chips and total_chips > 0]
+        if champions and all(p.is_eliminated or p in champions for p in self.game_state.players):
+            winner = champions[0]
+            self.game_over = True
+            victory_msg = f"🎉 {winner.name} wins the tournament! 🎉"
+            self.last_action_note = victory_msg
+            if self.gui:
+                self.gui.log_message(victory_msg, color="info")
     
     def get_random_action(self, player: Player) -> Tuple[str, int]:
         """Get a random action for a player"""
@@ -417,26 +569,67 @@ class GameManager:
         
         action = random.choices(actions, weights=weights)[0]
         amount = 0
-        
+        call_amount = max(0, self.game_state.current_bet - player.current_bet)
+
         if action == "raise":
-            # Random raise amount between 10 and min(100, player.chips)
-            max_raise = min(100, player.chips)
-            amount = random.randint(10, max_raise)
-        elif action == "call":
-            # Calculate call amount
-            amount = self.game_state.current_bet - player.current_bet
+            max_additional = player.chips - call_amount
+            if max_additional <= 0:
+                if call_amount > 0 and player.chips > 0:
+                    return "call", min(call_amount, player.chips)
+                return "check", 0
+
+            raise_cap = min(25, max_additional)
+            if raise_cap < 1:
+                if call_amount > 0 and player.chips > 0:
+                    return "call", min(call_amount, player.chips)
+                return "check", 0
+
+            min_raise = max(1, min(5, raise_cap))
+            amount = random.randint(min_raise, raise_cap) if raise_cap >= min_raise else raise_cap
+            amount = max(1, amount)
+
+            if call_amount + amount > player.chips:
+                amount = player.chips - call_amount
+                if amount <= 0:
+                    if call_amount > 0 and player.chips > 0:
+                        return "call", min(call_amount, player.chips)
+                    return "check", 0
+
+            return "raise", amount
+
+        if action == "call":
+            if call_amount == 0:
+                return "check", 0
+            return "call", min(call_amount, player.chips)
         
-        return action, amount
+        if action == "check":
+            return "check", 0
+        
+        return "fold", 0
     
     def play_autonomous_round(self):
         """Play one round of autonomous poker"""
-        # Check if only one player has chips left
-        active_players = [p for p in self.game_state.players if p.chips > 0]
+        if self.game_over:
+            return False
+
+        # Deal a new hand if the previous showdown requested one
+        if self.pending_new_hand:
+            self.start_new_hand()
+            if self.gui:
+                self.gui.log_message("=== NEW HAND DEALT ===")
+                self.gui.update_display()
+            return True
+
+        # Check if only one non-eliminated player remains with chips
+        active_players = [p for p in self.game_state.players if not p.is_eliminated]
         if len(active_players) <= 1:
             if len(active_players) == 1:
                 winner = active_players[0]
+                self.game_over = True
+                msg = f"🎉 GAME OVER! {winner.name} WINS THE TOURNAMENT! 🎉"
+                self.last_action_note = msg
                 if self.gui:
-                    self.gui.log_message(f"🎉 GAME OVER! {winner.name} WINS THE TOURNAMENT! 🎉")
+                    self.gui.log_message(msg, color="info")
                 return False
             else:
                 if self.gui:
@@ -451,13 +644,12 @@ class GameManager:
                 self.award_pot(winners)
                 winner_names = [w.name for w in winners]
                 if self.gui:
+                    self.gui.update_display()
                     self.gui.log_message(f"Winners: {', '.join(winner_names)} win ${pot_amount}")
-            
-            # Start a new hand automatically
-            self.start_new_hand()
-            if self.gui:
-                self.gui.log_message("=== NEW HAND DEALT ===")
-            return True
+                else:
+                    self.last_action_note = f"Winners: {', '.join(winner_names)} win ${pot_amount}"
+                self.pending_new_hand = True
+                return True
         
         # Check if we should progress to next phase
         if self._should_progress_phase():
@@ -512,21 +704,28 @@ class GameManager:
         """Get action from player's agent"""
         if player.agent and hasattr(player.agent, 'make_decision'):
             try:
-                # Get game state for agent
-                game_state = {
-                    'players': self.game_state.players,
-                    'community_cards': self.game_state.community_cards,
-                    'pot': self.game_state.pot,
-                    'current_bet': self.game_state.current_bet,
-                    'game_phase': self.game_state.game_phase
-                }
-                action = player.agent.make_decision(game_state)
-                if isinstance(action, tuple):
-                    return action
-                else:
-                    return action, 0
-            except:
-                pass
+                game_state = self._build_agent_game_state(player)
+                decision = player.agent.make_decision(game_state)
+                action, amount = self._normalize_agent_action(decision)
+                if action is None or not self._is_valid_agent_action(player, action, amount):
+                    player.pending_invalid_reason = (
+                        f"{player.name}'s agent attempted an invalid move ({decision})."
+                    )
+                    return "fold", 0
+                if action == "all-in":
+                    call_required = game_state['call_required']
+                    available = player.chips
+                    if available <= 0:
+                        return "fold", 0
+                    if call_required >= available:
+                        return "call", available
+                    raise_amount = available - call_required
+                    if raise_amount <= 0:
+                        return "call", available
+                    return "raise", raise_amount
+                return action, amount
+            except Exception:
+                return "fold", 0
         
         # Fallback to random action
         return self.get_random_action(player)
@@ -543,7 +742,8 @@ class GameManager:
             candidate = (start_index + offset) % total_players
             candidate_player = self.game_state.players[candidate]
 
-            if candidate_player.is_folded or candidate_player.chips <= 0 or candidate_player.is_all_in:
+            if (candidate_player.is_folded or candidate_player.is_all_in or
+                    candidate_player.chips <= 0 or candidate_player.is_eliminated):
                 continue
             if self.game_state.pending_players and candidate not in self.game_state.pending_players:
                 continue
@@ -558,7 +758,8 @@ class GameManager:
         """Return indices of players who can take an action"""
         return [
             idx for idx, player in enumerate(self.game_state.players)
-            if not player.is_folded and not player.is_all_in and player.chips > 0
+            if (not player.is_folded and not player.is_all_in and
+                player.chips > 0 and not player.is_eliminated)
         ]
 
     def _reset_pending_players(self, starting_index=None):
@@ -589,6 +790,184 @@ class GameManager:
             or self.game_state.players[idx].chips <= 0
         }
         self.game_state.pending_players -= inactive
+    
+    def _auto_fold(self, player_index: int, reason: str) -> bool:
+        """Force a player to fold after an invalid move and record a user-facing message."""
+        if player_index >= len(self.game_state.players):
+            return False
+        player = self.game_state.players[player_index]
+        if not player.is_folded:
+            player.fold()
+            player.last_action = "fold"
+        player.last_action_display = "Invalid -> Fold"
+        player.pending_invalid_reason = None
+        self.game_state.pending_players.discard(player_index)
+        self.last_action_note = f"{player.name}: invalid action - {reason}. Automatic fold applied."
+        return True
+
+    def pop_last_action_note(self) -> Optional[str]:
+        """Return and clear the latest action note (e.g., invalid move warnings)."""
+        note = self.last_action_note
+        self.last_action_note = None
+        return note
+
+    def _hand_rank_to_name(self, hand_rank: int, kickers: List[int]) -> str:
+        """Translate a numeric hand rank and kickers into a human-readable label."""
+        label = HAND_RANK_LABELS.get(hand_rank, "Unknown Hand")
+        if hand_rank == 10:  # Royal Flush
+            return label
+        if hand_rank == 9:  # Straight Flush
+            return f"{label} ({self._value_to_name(kickers[0])} high)"
+        if hand_rank == 8:  # Four of a Kind
+            return f"Four of {self._value_to_plural_name(kickers[0])}"
+        if hand_rank == 7:  # Full House
+            return (
+                f"Full House ({self._value_to_plural_name(kickers[0])} over "
+                f"{self._value_to_plural_name(kickers[1])})"
+            )
+        if hand_rank == 6:  # Flush
+            return f"Flush ({self._value_to_name(kickers[0])} high)"
+        if hand_rank == 5:  # Straight
+            return f"Straight to {self._value_to_name(kickers[0])}"
+        if hand_rank == 4:  # Three of a Kind
+            return f"Three of {self._value_to_plural_name(kickers[0])}"
+        if hand_rank == 3:  # Two Pair
+            high_pair, low_pair = kickers[:2]
+            return (
+                f"Two Pair ({self._value_to_plural_name(high_pair)} and "
+                f"{self._value_to_plural_name(low_pair)})"
+            )
+        if hand_rank == 2:  # One Pair
+            return f"Pair of {self._value_to_plural_name(kickers[0])}"
+        if hand_rank == 1:  # High Card
+            return f"High Card {self._value_to_name(kickers[0])}"
+        return label
+
+    def _value_to_name(self, value: int) -> str:
+        """Return the singular card rank name for a numeric value."""
+        return VALUE_NAMES.get(value, str(value))
+
+    def _value_to_plural_name(self, value: int) -> str:
+        """Return the pluralised card rank name for a numeric value."""
+        return PLURAL_VALUE_NAMES.get(value, f"{self._value_to_name(value)}s")
+
+    def _build_agent_game_state(self, player: Player) -> Dict[str, Any]:
+        """Create a restricted game state view for agents."""
+        player_index = self.game_state.players.index(player)
+        total_players = len(self.game_state.players)
+        previous_player = None
+        if total_players > 1:
+            previous_player = self.game_state.players[(player_index - 1) % total_players]
+        # Amount this player must contribute to call the current bet
+        call_required = max(0, self.game_state.current_bet - player.current_bet)
+
+        return {
+            'self': {
+                'name': player.name,
+                'chips': player.chips,
+                'hole_cards': list(player.hole_cards),
+                'current_bet': player.current_bet,
+                'total_bet': player.total_bet,
+                'is_all_in': player.is_all_in,
+            },
+            'community_cards': list(self.game_state.community_cards),
+            'pot': self.game_state.pot,
+            'current_bet': self.game_state.current_bet,
+            'call_required': call_required,
+            'game_phase': self.game_state.game_phase,
+            'other_player_moves': [
+                {
+                    'name': other.name,
+                    'last_action': other.last_action,
+                }
+                for other in self.game_state.players
+                if other is not player
+            ],
+            'previous_player_action': (
+                {
+                    'name': previous_player.name,
+                    'last_action': previous_player.last_action,
+                }
+                if previous_player and previous_player is not player
+                else None
+            ),
+        }
+
+    def _normalize_agent_action(self, decision) -> Tuple[Optional[str], Optional[int]]:
+        """Normalize an agent's decision into (action, amount)."""
+        action = None
+        amount = 0
+
+        if isinstance(decision, tuple):
+            if not decision:
+                return None, None
+            action = decision[0]
+            amount = decision[1] if len(decision) > 1 else 0
+        else:
+            action = decision
+            amount = 0
+
+        if not isinstance(action, str):
+            return None, None
+
+        action = action.strip().lower()
+
+        if action in {"fold", "check"}:
+            return action, 0
+
+        if action in {"all-in", "all in", "allin", "shove"}:
+            return "all-in", None
+
+        try:
+            amount_value = int(amount)
+        except (TypeError, ValueError):
+            return action, None
+
+        if amount_value < 0:
+            return action, None
+
+        return action, amount_value
+
+    def _is_valid_agent_action(self, player: Player, action: str, amount: Optional[int]) -> bool:
+        """Validate an agent-provided action."""
+        allowed_actions = {"fold", "check", "call", "raise", "all-in"}
+        if action not in allowed_actions:
+            return False
+
+        call_required = max(0, self.game_state.current_bet - player.current_bet)
+        available = player.chips
+
+        if action == "fold":
+            return True
+
+        if action == "check":
+            return call_required == 0 and (amount in (0, None))
+
+        if action == "all-in":
+            return available > 0
+
+        if action == "call":
+            if call_required == 0:
+                return amount in (0, None)
+            if available <= 0 or amount is None:
+                return False
+            if call_required <= available and amount == call_required:
+                return True
+            if call_required > available and amount == available:
+                return True
+            return False
+
+        if action == "raise":
+            if amount is None or amount <= 0:
+                return False
+            if available <= call_required:
+                return False
+            total_commit = call_required + amount
+            if total_commit > available:
+                return False
+            return True
+
+        return False
     
     def start_gui(self):
         """Start the GUI"""
