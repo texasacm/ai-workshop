@@ -192,7 +192,7 @@ class GameManager:
         ]
         agent_files.sort()
         
-        for i, agent_file in enumerate(agent_files[:8]):  # Max 8 players
+        for i, agent_file in enumerate(agent_files):
             default_name = f"Agent {i+1}"
             try:
                 spec = importlib.util.spec_from_file_location(
