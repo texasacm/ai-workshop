@@ -13,7 +13,7 @@ class PokerAgent(PokerAgentBase):
         super().__init__(name or self.DEFAULT_NAME)
 
     def make_decision(self, game_state):
-        _ = game_state  # Use helper accessors for clarity.
+        _ = game_state
         call_required = self.call_required
         chips = self.stack
 

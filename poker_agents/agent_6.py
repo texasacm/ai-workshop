@@ -1,9 +1,7 @@
 """
 Agent 6 — Cautious Agent
 
-This cautious raiser prefers to apply small pressure but abandons ship if a
-raise would cost more than half of the remaining stack. It probes by raising
-when affordable, otherwise folding rather than risking too many chips.
+Will raise a small amount of money but will never match a call if it is more than half of its current chips.
 """
 from poker_agents.agent_base import PokerAgentBase
 
@@ -15,7 +13,7 @@ class PokerAgent(PokerAgentBase):
         super().__init__(name or self.DEFAULT_NAME)
 
     def make_decision(self, game_state):
-        _ = game_state  # Decision making relies on helper properties.
+        _ = game_state
 
         stack = self.stack
         call_required = self.call_required
