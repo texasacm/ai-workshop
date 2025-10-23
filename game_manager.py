@@ -141,12 +141,13 @@ class GameState:
         self.community_cards = []
         self.pot = 0
         self.current_bet = 0
-        self.dealer_position = 0
+        self.dealer_position = -1
         self.current_player = 0
         self.game_phase = "preflop"  # preflop, flop, turn, river, showdown
         self.deck = []
         self.winner = None
         self.pending_players = set()
+        self.hand_count = 0
         
     def reset_deck(self):
         ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
@@ -160,14 +161,22 @@ class GameState:
         return None
 
 class GameManager:
-    def __init__(self, move_interval: float = 1.0):
+    def __init__(
+        self,
+        move_interval: float = 1.0,
+        starting_chips: int = PokerAgentBase.STARTING_CHIPS,
+        max_hand_limit: Optional[int] = None,
+    ):
         """Initialize the game engine and eagerly load any available agents."""
+        PokerAgentBase.STARTING_CHIPS = starting_chips
         self.game_state = GameState()
         self.gui = None
         self.move_interval = move_interval
         self.last_action_note = None
         self.pending_new_hand = False
         self.game_over = False
+        self.starting_chips = starting_chips
+        self.max_hand_limit = max_hand_limit
         self.load_agents()
     
     def load_agents(self):
@@ -200,8 +209,8 @@ class GameManager:
                     agent = self._instantiate_agent(agent_cls, default_name)
                     if isinstance(agent, PokerAgentBase) and callable(getattr(agent, 'make_decision', None)):
                         agent.name = agent.name or default_name
-                        agent.chips = PokerAgentBase.STARTING_CHIPS
-                        player = Player(agent.name, PokerAgentBase.STARTING_CHIPS, agent)
+                        agent.chips = self.starting_chips
+                        player = Player(agent.name, self.starting_chips, agent)
                 if player is None:
                     raise ValueError("Invalid PokerAgent implementation")
                 player.position = i
@@ -210,7 +219,7 @@ class GameManager:
             except Exception as e:
                 print(f"Error loading {agent_file}: {e}")
                 # Create a default player on error
-                player = Player(default_name, PokerAgentBase.STARTING_CHIPS)
+                player = Player(default_name, self.starting_chips)
                 player.position = i
                 self.game_state.players.append(player)
 
@@ -226,6 +235,14 @@ class GameManager:
         """Start a new poker hand"""
         if self.game_over:
             return
+        if (
+            self.max_hand_limit is not None
+            and self.game_state.hand_count >= self.max_hand_limit
+        ):
+            self._end_game_due_to_limit()
+            return
+
+        self.game_state.hand_count += 1
         self.game_state.reset_deck()
         self.game_state.community_cards = []
         self.game_state.pot = 0
@@ -263,13 +280,16 @@ class GameManager:
         self.game_state.game_phase = "preflop"
         
         # Find first active player for current player
-        self.game_state.current_player = 0
-        for i, player in enumerate(self.game_state.players):
-            if player.chips > 0:
-                self.game_state.current_player = i
-                break
+        first_player = self._pick_first_player_for_hand()
+        self.game_state.current_player = first_player
 
         self._reset_pending_players(self.game_state.current_player)
+
+        hand_msg = f"=== NEW HAND #{self.game_state.hand_count} DEALT ==="
+        if self.gui:
+            self.gui.log_message(hand_msg, color="info")
+        else:
+            self.last_action_note = hand_msg
         
         if self.gui:
             self.gui.update_display()
@@ -619,8 +639,9 @@ class GameManager:
         # Deal a new hand if the previous showdown requested one
         if self.pending_new_hand:
             self.start_new_hand()
+            if self.game_over:
+                return False
             if self.gui:
-                self.gui.log_message("=== NEW HAND DEALT ===")
                 self.gui.update_display()
             return True
 
@@ -776,6 +797,56 @@ class GameManager:
 
         # Fallback to original player if no valid candidate found
         self.game_state.current_player = start_index
+
+    def _pick_first_player_for_hand(self) -> int:
+        """Rotate the first-to-act position, skipping eliminated or broke players."""
+        players = self.game_state.players
+        if not players:
+            return 0
+        total_players = len(players)
+        start = (self.game_state.dealer_position + 1) % total_players
+        for offset in range(total_players):
+            candidate = (start + offset) % total_players
+            candidate_player = players[candidate]
+            if candidate_player.chips > 0 and not candidate_player.is_eliminated:
+                self.game_state.dealer_position = candidate
+                return candidate
+        return 0
+
+    def _end_game_due_to_limit(self):
+        """Declare a winner when the configured hand limit is reached."""
+        if self.game_over:
+            return
+
+        players = self.game_state.players
+        winners = []
+        max_chips = 0
+        if players:
+            max_chips = max(p.chips for p in players)
+            winners = [p for p in players if p.chips == max_chips]
+
+        self.game_state.winner = winners if len(winners) != 1 else winners[0]
+        self.game_over = True
+        self.pending_new_hand = False
+        self.game_state.pending_players.clear()
+
+        if not winners:
+            message = "Hand limit reached. No winners could be determined."
+        elif len(winners) == 1:
+            message = (
+                f"Hand limit reached. {winners[0].name} wins with ${max_chips} in chips."
+            )
+        else:
+            names = ", ".join(p.name for p in winners)
+            message = (
+                f"Hand limit reached. {names} tie for the lead with ${max_chips} each."
+            )
+
+        self.last_action_note = message
+        if self.gui:
+            self.gui.log_message(message, color="info")
+            self.gui.show_status_message(message, error=False)
+            self.gui.update_display()
 
     def _players_who_can_act(self):
         """Return indices of players who can take an action"""

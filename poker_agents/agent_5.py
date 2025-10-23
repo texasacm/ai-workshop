@@ -1,19 +1,17 @@
 """
-Agent 1 — Always All-in
+Agent 5 — Pushover
 
-This agent will always shove all-in no matter what
+Always folds
 """
 from poker_agents.agent_base import PokerAgentBase
 
 
 class PokerAgent(PokerAgentBase):
-    DEFAULT_NAME = "Agent 1"
+    DEFAULT_NAME = "Agent 5"
 
     def __init__(self, name=None):
         super().__init__(name or self.DEFAULT_NAME)
 
     def make_decision(self, game_state):
         _ = game_state
-
-        # lol
-        return self.all_in()
+        return self.fold()

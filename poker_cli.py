@@ -3,19 +3,46 @@
 Command-line poker game for environments without GUI
 """
 
+from typing import Optional
+
 from game_manager import GameManager, Card, Suit
+from poker_agents.agent_base import PokerAgentBase
+
 
 class PokerCLI:
-    def __init__(self):
-        self.game = GameManager()
+    def __init__(
+        self,
+        move_interval: float = 1.0,
+        starting_chips: Optional[int] = None,
+        max_hand_limit: Optional[int] = None,
+    ):
+        starting_stack = (
+            PokerAgentBase.STARTING_CHIPS if starting_chips is None else starting_chips
+        )
+        self.game = GameManager(
+            move_interval=move_interval,
+            starting_chips=starting_stack,
+            max_hand_limit=max_hand_limit,
+        )
         self.running = True
     
     def display_game_state(self):
         """Display current game state"""
         print("\n" + "="*60)
+        limit = self.game.max_hand_limit
+        hand_no = self.game.game_state.hand_count
+        hand_line = f"HAND #: {hand_no}"
+        if limit:
+            hand_line += f" / {limit}"
+        print(hand_line)
         print(f"POT: ${self.game.game_state.pot}")
         print(f"PHASE: {self.game.game_state.game_phase.upper()}")
-        print(f"CURRENT PLAYER: {self.game.game_state.players[self.game.game_state.current_player].name}")
+        if self.game.game_state.players:
+            current_idx = self.game.game_state.current_player
+            current_idx = min(current_idx, len(self.game.game_state.players) - 1)
+            print(f"CURRENT PLAYER: {self.game.game_state.players[current_idx].name}")
+        else:
+            print("CURRENT PLAYER: None")
         print("="*60)
         
         # Display community cards
@@ -141,8 +168,12 @@ class PokerCLI:
             
             if choice == "1":
                 self.game.start_new_hand()
-                print("New hand dealt!")
-                self.display_game_state()
+                self._report_last_note()
+                if self.game.game_over:
+                    print("Game has concluded.")
+                    self.running = False
+                else:
+                    self.display_game_state()
             elif choice == "2":
                 self.game.next_phase()
                 print(f"Phase changed to: {self.game.game_state.game_phase}")

@@ -21,8 +21,14 @@ Welcome to the AI Poker Workshop – a sandbox for teaching poker bots how to pl
 ## Running the game
 
 ```bash
-python main.py
+python main.py [--starting_chips N] [--max_hand_limit M] [--move_interval SECONDS]
 ``` 
+
+### Runtime options
+
+- `--starting_chips`: Stack size assigned to every agent (default `100`).
+- `--max_hand_limit`: Stops the tournament after M hands, crowning the chip leader.
+- `--move_interval`: Seconds between autonomous actions in the GUI auto-play loop.
 
 *If the GUI fails with "No module named tkinter":*
 1. macOS (Homebrew python):
@@ -35,18 +41,23 @@ python main.py
    ```bash
    sudo apt-get install python3-tk
    ```
+4. Verify tkinter is installed by running `python3 -m tkinter`. A small window should popup.
 
 Once tkinter is available, `main.py` launches the GUI. Without it, the CLI automatically starts.
 
 ---
-
 ## Building your own agent
 
 1. Copy `poker_agents/agent_template.py` → `poker_agents/my_agent.py`.
 2. Rename the class (or override `DEFAULT_NAME`) and fill in `make_decision`.
-3. `GameManager` auto-loads any `PokerAgent` class in `poker_agents/` (except the base/template files), up to eight seats.
+3. `GameManager` auto-loads any `PokerAgent` class in `poker_agents/` (excluding the base/template files), up to eight seats.
+4. Take advantage of the helper methods exposed on `PokerAgentBase`:
+   - Cached state: `self.state`, `self.hero`, `self.call_required`, `self.stack`
+   - Action builders: `self.check()`, `self.call()`, `self.raise_by(amount)`, `self.fold()`, `self.all_in()`
+   - Diagnostics: `self.debug("message")`
+5. WARNING: If your agent performs an invalid move (e.g. you check when you are required to call or attempt to raise an amount of money you don't have), your move will automatically be converted to fold. Make sure to correctly make your moves!
 
-### Agent API recap
+### Agent API
 
 Every agent must subclass `PokerAgentBase` and implement:
 
@@ -63,7 +74,7 @@ Allowed `action` values (case-insensitive):
 - `"check"`
 - `"call"`
 - `"raise"`
-- `"all-in"` / `"shove"`
+- `"all-in"`
 
 For `call` or `raise`, return a tuple `(action, amount)` where `amount` is the chips you want to commit. Unsupported actions (or numbers you can’t afford) cause the engine to automatically fold your agent.
 
@@ -71,7 +82,7 @@ For `call` or `raise`, return a tuple `(action, amount)` where `amount` is the c
 
 `game_state` is a dictionary with only public information:
 
-- `self`: dict containing your chip stack, hole cards, committed bets, and `is_all_in` flag.
+- `self`: dict containing your chip stack, hole cards, and your bets.
 - `community_cards`: list of revealed board cards.
 - `pot`: total chips in the middle.
 - `current_bet`: highest bet any player has committed in the current round.
@@ -86,13 +97,4 @@ Use this snapshot to decide your move—no direct access to other players’ car
 
 ## Playing with the sample agents
 
-Run `python main.py` and use the GUI (“Start Auto Play”) to watch the four built-in agents:
-
-1. **Agent 1** – shoves all-in every turn.
-2. **Agent 2** – mirrors the previous player.
-3. **Agent 3** – checks when possible, otherwise calls small bets.
-4. **Agent 4** – coin-flip caller that instantly shoves with an Ace.
-
-These demonstrate the decision API and the consequences of invalid moves (auto-fold). Use them as references when shaping your own strategies.
-
-Happy hacking, and may the best bot win!
+Run `python main.py` and use the GUI (“Start Auto Play”) to watch the built-in agents play. The info panel shows the current hand number (and limit if set), while the CLI mirrors the same counters when printing state. View the implementation of each agent for more details on their strategies.

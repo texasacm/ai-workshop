@@ -1,4 +1,8 @@
-# Passive checking agent
+"""
+Agent 3 — Passive Checking Strategy
+
+This agent will always check if possible. Otherwise, it will call to match
+"""
 from poker_agents.agent_base import PokerAgentBase
 
 
@@ -9,14 +13,16 @@ class PokerAgent(PokerAgentBase):
         super().__init__(name or self.DEFAULT_NAME)
 
     def make_decision(self, game_state):
-        my_state = game_state['self']
-        call_required = game_state['call_required']
-        chips = my_state['chips']
+        _ = game_state  # Use helper accessors for clarity.
+        call_required = self.call_required
+        chips = self.stack
 
+        # Take the free option whenever the action checks through.
         if call_required == 0:
-            return "check", 0
+            return self.check()
 
+        # Call when affordable, otherwise surrender the hand.
         if call_required <= chips:
-            return "call", call_required
+            return self.call()
 
-        return "fold", 0
+        return self.fold()

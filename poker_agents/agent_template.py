@@ -23,6 +23,12 @@ class PokerAgent(PokerAgentBase):
       - previous_player_action: the name/action of the player who acted immediately before you
     Agents must return either a string action ('fold', 'check', 'call', 'raise')
     or a tuple of (action, amount) for raises/calls.
+
+    Convenience helpers available during make_decision:
+      - self.state / self.hero for quick access to the cached game state
+      - self.call_required / self.stack for numeric shortcuts
+      - self.check(), self.call(), self.raise_by(amount), self.all_in()
+        which emit properly formatted actions for the GameManager
     """
 
     DEFAULT_NAME = "Template Agent"
@@ -31,26 +37,16 @@ class PokerAgent(PokerAgentBase):
         super().__init__(name or self.DEFAULT_NAME)
 
     def make_decision(self, game_state) -> Tuple[str, int]:
-        my_state = game_state["self"]
-        chips = my_state["chips"]
-        call_required = game_state["call_required"]
-
-        # game_state reference:
-        #   self -> {'chips', 'hole_cards', 'current_bet', 'total_bet', 'is_all_in'}
-        #   community_cards -> list of Card objects everyone can see
-        #   pot -> total chips in the middle
-        #   current_bet -> highest bet any player has committed this round
-        #   call_required -> how many chips you must put in to call
-        #   game_phase -> preflop / flop / turn / river / showdown
-        #   other_player_moves -> [{'name', 'last_action'} for opponents]
-        #   previous_player_action -> {'name', 'last_action'} for the last actor (or None)
+        _ = game_state  # Access the cached state via helpers to keep code tidy.
+        call_required = self.call_required
+        chips = self.stack
 
         # --- Replace the logic below with your strategy ---
         if call_required == 0:
-            return "check", 0
+            return self.check()
 
-        if call_required <= chips // 10:
-            return "call", call_required
+        if call_required <= max(1, chips // 10):
+            return self.call()
 
         # Fold when the call is too expensive
-        return "fold", 0
+        return self.fold()

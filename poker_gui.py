@@ -5,11 +5,12 @@ from typing import List, Optional
 
 class CardWidget:
     """Widget for displaying a card as text"""
-    def __init__(self, parent, card=None, width=80, height=110):
+    def __init__(self, parent, card=None, width=80, height=110, font_size=16):
         self.parent = parent
         self.card = card
         self.width = width
         self.height = height
+        self.font_size = font_size
         self.frame = tk.Frame(parent, width=width, height=height, 
                              relief=tk.RAISED, bd=2, bg='white')
         self.frame.pack_propagate(False)
@@ -17,7 +18,7 @@ class CardWidget:
         self.label = tk.Label(
             self.frame,
             text=self._get_card_text(),
-            font=('Helvetica', 16, 'bold'),
+            font=('Helvetica', self.font_size, 'bold'),
             bg='white',
             fg='black',
             justify='center'
@@ -47,8 +48,15 @@ class PlayerWidget:
         self.player = player
         self.position = position
         self.total_positions = total_positions
-        self.width = 180
-        self.height = 165
+        self.scale = self._compute_scale(total_positions)
+        self.width = int(180 * self.scale)
+        self.height = int(165 * self.scale)
+        self.card_width = int(70 * self.scale)
+        self.card_height = int(100 * self.scale)
+        self.card_font = max(10, int(16 * self.scale))
+        self.title_font = max(9, int(10 * self.scale))
+        self.body_font = max(8, int(9 * self.scale))
+        self.small_font = max(7, int(8 * self.scale))
         
         # Calculate position on the oval table
         angle = (2 * math.pi * position) / total_positions
@@ -67,7 +75,7 @@ class PlayerWidget:
         self.hand_label = tk.Label(
             self.frame,
             text="",
-            font=('Arial', 9, 'italic'),
+            font=('Arial', self.body_font, 'italic'),
             bg='lightblue',
             fg='black',
             wraplength=self.width - 10,
@@ -77,17 +85,17 @@ class PlayerWidget:
         
         # Player name
         self.name_label = tk.Label(self.frame, text=self.player.name, 
-                                  font=('Arial', 10, 'bold'), bg='lightblue')
+                                  font=('Arial', self.title_font, 'bold'), bg='lightblue')
         self.name_label.pack()
         
         # Player chips
         self.chips_label = tk.Label(self.frame, text=f"${self.player.chips}", 
-                                   font=('Arial', 9), bg='lightblue')
+                                   font=('Arial', self.body_font), bg='lightblue')
         self.chips_label.pack()
         
         # Player cards
         self.cards_frame = tk.Frame(self.frame, bg='lightblue')
-        self.cards_frame.config(width=self.width - 20, height=110)
+        self.cards_frame.config(width=self.width - 20, height=self.card_height + 10)
         self.cards_frame.pack_propagate(False)
         self.cards_frame.pack(pady=4)
         self.cards_frame.grid_columnconfigure(0, weight=1)
@@ -96,28 +104,44 @@ class PlayerWidget:
 
         self.card_widgets = []
         for i in range(2):
-            card_widget = CardWidget(self.cards_frame, width=70, height=100)
+            card_widget = CardWidget(
+                self.cards_frame,
+                width=self.card_width,
+                height=self.card_height,
+                font_size=self.card_font,
+            )
             self.card_widgets.append(card_widget)
-            card_widget.grid(row=0, column=i, padx=6, pady=2, sticky="n")
+            card_widget.grid(
+                row=0,
+                column=i,
+                padx=max(2, int(6 * self.scale)),
+                pady=max(1, int(2 * self.scale)),
+                sticky="n"
+            )
 
         # Last action label
         self.last_action_label = tk.Label(
             self.frame,
             text="",
-            font=('Arial', 8, 'italic'),
+            font=('Arial', self.small_font, 'italic'),
             bg='lightblue'
         )
         self.last_action_label.pack(pady=2)
 
         # Current bet
-        self.bet_label = tk.Label(self.frame, text="", font=('Arial', 8), bg='lightblue')
+        self.bet_label = tk.Label(
+            self.frame,
+            text="",
+            font=('Arial', self.small_font),
+            bg='lightblue'
+        )
         self.bet_label.pack()
         
         # Status
         self.status_label = tk.Label(
             self.frame,
             text="",
-            font=('Arial', 8),
+            font=('Arial', self.small_font),
             bg='lightblue',
             wraplength=self.width - 10,
             justify='center'
@@ -194,6 +218,16 @@ class PlayerWidget:
         """Place the widget at specific coordinates"""
         self.frame.place(x=x, y=y, width=self.width, height=self.height)
 
+    def _compute_scale(self, total_positions: int) -> float:
+        """Scale cards so larger tables remain readable."""
+        if total_positions <= 0:
+            return 1.0
+        if total_positions <= 4:
+            return 1.0
+        if total_positions <= 6:
+            return 0.85
+        return max(0.6, 4.0 / total_positions)
+
 class PokerGUI:
     def __init__(self, game_manager):
         self.game_manager = game_manager
@@ -224,6 +258,15 @@ class PokerGUI:
         self.pot_label = tk.Label(self.info_frame, text="Pot: $0", 
                                  font=('Arial', 14, 'bold'), bg='lightgray')
         self.pot_label.pack(pady=5)
+
+        # Hand counter
+        self.hand_count_label = tk.Label(
+            self.info_frame,
+            text="Hand: 0",
+            font=('Arial', 12),
+            bg='lightgray'
+        )
+        self.hand_count_label.pack(pady=5)
         
         # Game phase
         self.phase_label = tk.Label(self.info_frame, text="Phase: Preflop", 
@@ -323,21 +366,34 @@ class PokerGUI:
         """Create widgets for all players"""
         self.player_widgets = []
         players = self.game_manager.game_state.players
-        
+        total_players = max(1, len(players))
+        radius_x = 220 + max(0, total_players - 4) * 20
+        radius_y = min(200, 150 + max(0, total_players - 4) * 12)
+
         for i, player in enumerate(players):
-            # Calculate position around the table
-            angle = (2 * math.pi * i) / len(players)
-            x = 400 + 200 * math.cos(angle) - 50
-            y = 250 + 150 * math.sin(angle) - 50
-            
-            player_widget = PlayerWidget(self.canvas, player, i, len(players))
-            player_widget.place(x, y)
+            angle = (2 * math.pi * i) / total_players
+            center_x = 400 + radius_x * math.cos(angle)
+            center_y = 250 + radius_y * math.sin(angle)
+
+            player_widget = PlayerWidget(self.canvas, player, i, total_players)
+            player_widget.place(
+                int(center_x - (player_widget.width / 2)),
+                int(center_y - (player_widget.height / 2))
+            )
             self.player_widgets.append(player_widget)
     
     def update_display(self):
         """Update the entire display"""
         # Update pot
         self.pot_label.config(text=f"Pot: ${self.game_manager.game_state.pot}")
+
+        # Update hand counter
+        limit = self.game_manager.max_hand_limit
+        hand_total = self.game_manager.game_state.hand_count
+        hand_text = f"Hand: {hand_total}"
+        if limit:
+            hand_text += f" / {limit}"
+        self.hand_count_label.config(text=hand_text)
         
         # Update phase
         self.phase_label.config(text=f"Phase: {self.game_manager.game_state.game_phase.title()}")
@@ -358,8 +414,10 @@ class PokerGUI:
 
         note = self.game_manager.pop_last_action_note()
         if note:
-            self.show_status_message(note, error=True)
-            self.log_message(note, color="error")
+            lower_note = note.lower()
+            is_error = "invalid" in lower_note or "error" in lower_note
+            self.show_status_message(note, error=is_error)
+            self.log_message(note, color="error" if is_error else "info")
         else:
             self.show_status_message("")
     
