@@ -28,7 +28,7 @@ def test_autonomous_gameplay():
     
     print("\nPlaying autonomous rounds...")
     round_count = 0
-    max_rounds = 20  # Prevent infinite loops
+    max_rounds = 100  # Prevent infinite loops
     
     while round_count < max_rounds:
         round_count += 1
