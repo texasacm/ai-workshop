@@ -31,7 +31,7 @@ class PokerAgent(PokerAgentBase):
         which emit properly formatted actions for the GameManager
     """
 
-    DEFAULT_NAME = "Template Agent"
+    DEFAULT_NAME = "PriscillaPokerAgent"
 
     def __init__(self, name: Optional[str] = None):
         super().__init__(name or self.DEFAULT_NAME)
@@ -40,7 +40,7 @@ class PokerAgent(PokerAgentBase):
         _ = game_state  # Access the cached state via helpers to keep code tidy.
         call_required = self.call_required
         chips = self.stack
-
+        
         # --- Replace the logic below with your strategy ---
         if call_required == 0:
             return self.check()
