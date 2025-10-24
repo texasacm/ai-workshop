@@ -59,8 +59,9 @@ def main():
     
     print("\nStarting game interface...")
     
+    # game_manager.start_gui()
     # Try to start GUI, fall back to CLI if not available
-    if not game_manager.start_gui():
+    if False:
         print("GUI not available, starting command-line interface...")
         print("Use the CLI to manage the game:")
         print("- Choose options from the menu")
@@ -68,13 +69,13 @@ def main():
         print("- 'Next Phase' to advance the game (flop, turn, river)")
         print("- 'Player Action' for manual play")
         
-        from poker_cli import PokerCLI
-        cli = PokerCLI(
-            move_interval=args.move_interval,
-            starting_chips=args.starting_chips,
-            max_hand_limit=args.max_hand_limit,
-        )
-        cli.run()
+    from poker_cli import PokerCLI
+    cli = PokerCLI(
+        move_interval=args.move_interval,
+        starting_chips=args.starting_chips,
+        max_hand_limit=args.max_hand_limit,
+    )
+    cli.run()
 
 if __name__ == "__main__":
     main()
